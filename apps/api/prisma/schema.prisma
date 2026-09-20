@@ -184,6 +184,7 @@ model Source {
   @@map("sources")
   @@index([researchSessionId])
   @@index([url])
+  @@unique([researchSessionId, url])
 }
 
 model Evidence {
