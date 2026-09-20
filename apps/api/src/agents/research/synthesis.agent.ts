@@ -104,6 +104,30 @@ export class ReportContextBuilder {
       credibilityScore: s.credibilityScore ?? 0.5,
     }));
 
+    // Ensure any source referenced by verified claims is included
+    const existingSourceIds = new Set(allowableCitations.map((s) => s.id));
+
+    const appendReferencedSources = (claims: typeof supportedClaims) => {
+      claims.forEach((claim) => {
+        claim.evidence.forEach((ce) => {
+          const source = ce.evidence.source;
+          if (source && !existingSourceIds.has(source.id)) {
+            allowableCitations.push({
+              id: source.id,
+              title: source.title,
+              url: source.url,
+              publisher: source.publisher || "Unknown Publisher",
+              credibilityScore: source.credibilityScore ?? 0.5,
+            });
+            existingSourceIds.add(source.id);
+          }
+        });
+      });
+    };
+
+    appendReferencedSources(supportedClaims);
+    appendReferencedSources(contradictedClaims);
+
     return {
       query: session.query,
       title: session.title,
