@@ -4,6 +4,7 @@ import { getRedisConnection } from "../queues/research.queue";
 import { ResearchExecutionService } from "../../services/research-execution.service";
 import { JobService } from "../services/job.service";
 import { env } from "../../config";
+import { redis } from "../../lib/redis";
 import type { ResearchTaskJobPayload } from "../types/job.types";
 
 /**
@@ -100,15 +101,34 @@ export async function evaluateSessionTerminalState(sessionId: string) {
 
     console.log(`[Worker] Sufficient tasks completed (${completedTasksCount}/${totalTasks}). Running verification step before synthesis.`);
 
-    // Verification Scout step: evaluate claim consistency across sources before final synthesis
-    try {
-      await ResearchExecutionService.executeSessionVerification(sessionId);
-    } catch (err: any) {
-      console.error(`[Worker] Verification step failed for session ${sessionId}: ${err.message}. Proceeding to synthesis.`);
+    // Only one terminal worker may verify and enqueue synthesis for a session.
+    const lockKey = `research:verification:${sessionId}`;
+    const lockToken = `${process.pid}:${Date.now()}:${Math.random()}`;
+    const acquired = await redis.set(lockKey, lockToken, "EX", 300, "NX");
+    if (acquired !== "OK") {
+      console.log(`[Worker] Verification is already running for session ${sessionId}. Skipping duplicate terminal trigger.`);
+      return;
     }
 
-    console.log(`[Worker] Enqueuing SYNTHESIS job.`);
-    await JobService.enqueueSynthesis(sessionId);
+    try {
+      // Verification Scout step: evaluate claim consistency across sources before final synthesis
+      try {
+        await ResearchExecutionService.executeSessionVerification(sessionId);
+      } catch (err: any) {
+        console.error(`[Worker] Verification step failed for session ${sessionId}: ${err.message}. Proceeding to synthesis.`);
+      }
+
+      console.log(`[Worker] Enqueuing SYNTHESIS job.`);
+      await JobService.enqueueSynthesis(sessionId);
+    } finally {
+      // Delete only our lock, so an expired/reacquired lock is never removed by this worker.
+      await redis.eval(
+        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+        1,
+        lockKey,
+        lockToken
+      );
+    }
   } else {
     // Insufficient evidence/completed tasks. Mark session as FAILED.
     console.log(`[Worker] Insufficient completed tasks (${completedTasksCount}/${totalTasks}). Minimum required: ${minCompleted}. Marking session as FAILED.`);

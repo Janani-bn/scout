@@ -7,10 +7,11 @@ import { EvidenceAgent } from "../../agents/research/evidence.agent";
 import { ClaimAgent } from "../../agents/research/claim.agent";
 import { CriticAgent } from "../../agents/research/critic.agent";
 import { SynthesisAgent } from "../../agents/research/synthesis.agent";
+import { VerificationScout } from "../../agents/research/verification.agent";
 import { ResearchSessionExecutionService } from "../../services/research-session-execution.service";
 import { ResearchExecutionService } from "../../services/research-execution.service";
 import { JobService } from "../services/job.service";
-import { researchTaskJobHandler } from "../workers/research-task.worker";
+import { researchTaskJobHandler, evaluateSessionTerminalState } from "../workers/research-task.worker";
 import { synthesisJobHandler } from "../workers/synthesis.worker";
 import { buildApp } from "../../app";
 
@@ -74,6 +75,7 @@ vi.mock("../../lib/prisma", () => {
 });
 
 import { prisma } from "../../lib/prisma";
+import { redis } from "../../lib/redis";
 
 // 2. Mock Redis Client to prevent network connections
 vi.mock("../../lib/redis", () => {
@@ -84,6 +86,7 @@ vi.mock("../../lib/redis", () => {
       on: vi.fn(),
       get: vi.fn().mockResolvedValue(null),
       set: vi.fn().mockResolvedValue("OK"),
+      eval: vi.fn().mockResolvedValue(1),
     },
   };
 });
@@ -159,6 +162,7 @@ describe("SCOUT Asynchronous Execution & Intelligent Synthesis Tests", () => {
     AgentRegistry.register(new ClaimAgent());
     AgentRegistry.register(new CriticAgent());
     AgentRegistry.register(new SynthesisAgent());
+    AgentRegistry.register(new VerificationScout());
 
     // Prisma Mocks Defaults
     (prisma.user.upsert as any).mockResolvedValue(mockUser);
@@ -234,8 +238,17 @@ describe("SCOUT Asynchronous Execution & Intelligent Synthesis Tests", () => {
         { ...mockTasksList[0], status: "COMPLETED" },
       ] as any);
 
-      // Mock executeTask logic
+      // Mock task execution and a real verification result before synthesis.
       const spyExecute = vi.spyOn(ResearchExecutionService, "executeTask").mockResolvedValue(undefined);
+      const callOrder: string[] = [];
+      const spyVerify = vi.spyOn(ResearchExecutionService, "executeSessionVerification").mockImplementation(async () => {
+        callOrder.push("verification");
+        return { verifiedClaims: [{ claimIndex: 0, supportingSourceIndexes: [0] }], unsupportedClaims: [], contradictions: [] };
+      });
+      mockQueueAdd.mockImplementation(async (name: string) => {
+        if (name === "SYNTHESIS") callOrder.push("synthesis");
+        return { id: "job-mock" };
+      });
 
       const mockJob = {
         id: "job-1",
@@ -251,6 +264,8 @@ describe("SCOUT Asynchronous Execution & Intelligent Synthesis Tests", () => {
       await researchTaskJobHandler(mockJob);
 
       expect(spyExecute).toHaveBeenCalledWith(mockSession.id, "task-123");
+      expect(spyVerify).toHaveBeenCalledWith(mockSession.id);
+      expect(callOrder).toEqual(["verification", "synthesis"]);
       // Synthesis should be enqueued because task finished and completed >= min
       expect(mockQueueAdd).toHaveBeenCalledWith(
         "SYNTHESIS",
@@ -259,9 +274,23 @@ describe("SCOUT Asynchronous Execution & Intelligent Synthesis Tests", () => {
           researchSessionId: mockSession.id,
         },
         expect.objectContaining({
-          jobId: `synthesis:${mockSession.id}`,
+          jobId: `synthesis_${mockSession.id}`,
         })
       );
+    });
+
+    it("should skip duplicate terminal verification when the session lock is held", async () => {
+      vi.mocked(prisma.researchTask.findMany).mockResolvedValue([
+        { ...mockTasksList[0], status: "COMPLETED" },
+      ] as any);
+      vi.mocked(prisma.report.findFirst).mockResolvedValue(null);
+      vi.mocked(redis.set).mockResolvedValueOnce(null);
+      const spyVerify = vi.spyOn(ResearchExecutionService, "executeSessionVerification");
+
+      await evaluateSessionTerminalState(mockSession.id);
+
+      expect(spyVerify).not.toHaveBeenCalled();
+      expect(mockQueueAdd).not.toHaveBeenCalledWith("SYNTHESIS", expect.anything(), expect.anything());
     });
 
     it("should skip processing if task is already COMPLETED", async () => {

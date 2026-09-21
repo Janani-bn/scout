@@ -17,6 +17,12 @@ export const verificationInputSchema = z.object({
       url: z.string().optional(),
       publisher: z.string().nullable().optional(),
       credibilityScore: z.number().min(0).max(1).optional(),
+      evidence: z.array(
+        z.object({
+          content: z.string({ required_error: "Evidence content is required." }),
+          summary: z.string().nullable().optional(),
+        })
+      ).default([]),
     })
   ).default([]),
 });
@@ -168,8 +174,10 @@ ${JSON.stringify(
   sources.map((s, index) => ({
     index,
     title: s.title,
+    url: s.url,
     publisher: s.publisher,
     credibilityScore: s.credibilityScore,
+    evidence: s.evidence,
   })),
   null,
   2
@@ -189,18 +197,34 @@ ${JSON.stringify(
       const inRange = (i: number) => i >= 0 && i < claims.length;
       const sourceInRange = (i: number) => i >= 0 && i < sources.length;
 
-      const verifiedClaims = result.verifiedClaims
+      const sanitizedCandidates = result.verifiedClaims
         .filter((v) => inRange(v.claimIndex))
         .map((v) => ({
           ...v,
-          supportingSourceIndexes: (v.supportingSourceIndexes ?? []).filter(sourceInRange),
+          supportingSourceIndexes: [...new Set(
+            (v.supportingSourceIndexes ?? []).filter(
+              (index) => sourceInRange(index) && sources[index].evidence.length > 0
+            )
+          )],
         }));
+      // A claim is only verified when at least one valid source has evidence content.
+      const verifiedClaims = sanitizedCandidates.filter((v) => v.supportingSourceIndexes.length > 0);
       const verifiedIndexes = new Set(verifiedClaims.map((v) => v.claimIndex));
+      const rejectedVerifiedClaims = sanitizedCandidates
+        .filter((v) => v.supportingSourceIndexes.length === 0)
+        .map((v) => ({
+          claimIndex: v.claimIndex,
+          reasoning: "No valid evidence-backed source was provided for this claim.",
+        }));
 
-      // A claim cannot be both verified and unsupported; verified wins
-      const unsupportedClaims = result.unsupportedClaims.filter(
-        (u) => inRange(u.claimIndex) && !verifiedIndexes.has(u.claimIndex)
-      );
+      // A claim cannot be both verified and unsupported; verified wins.
+      const unsupportedByIndex = new Map<number, { claimIndex: number; reasoning: string }>();
+      for (const unsupported of [...result.unsupportedClaims, ...rejectedVerifiedClaims]) {
+        if (inRange(unsupported.claimIndex) && !verifiedIndexes.has(unsupported.claimIndex)) {
+          unsupportedByIndex.set(unsupported.claimIndex, unsupported);
+        }
+      }
+      const unsupportedClaims = [...unsupportedByIndex.values()];
 
       const contradictions = result.contradictions.map((c) => ({
         ...c,

@@ -352,7 +352,14 @@ export class ResearchExecutionService {
     const sources = await prisma.source.findMany({
       where: { researchSessionId: sessionId },
       orderBy: { credibilityScore: "desc" },
-      take: 25, // Bounded context size
+      take: 25, // Bounded source count keeps the verification prompt manageable
+      include: {
+        evidence: {
+          orderBy: { relevanceScore: "desc" },
+          take: 5,
+          select: { content: true, summary: true },
+        },
+      },
     });
 
     const verificationPayload = {
@@ -366,6 +373,11 @@ export class ResearchExecutionService {
         url: s.url,
         publisher: s.publisher,
         credibilityScore: s.credibilityScore ?? 0.5,
+        evidence: (s.evidence || []).map((e: any) => ({
+          // Bound individual excerpts as well as source/evidence counts.
+          content: e.content.slice(0, 2000),
+          summary: e.summary,
+        })),
       })),
     };
 
@@ -380,8 +392,17 @@ export class ResearchExecutionService {
     // Apply verified claim statuses
     const verifiedClaims = verification?.verifiedClaims || [];
     for (const verified of verifiedClaims) {
+      const validSupportingSources = Array.isArray(verified.supportingSourceIndexes)
+        ? verified.supportingSourceIndexes.filter(
+            (index: unknown) => {
+              if (!Number.isInteger(index)) return false;
+              const sourceIndex = index as number;
+              return sourceIndex >= 0 && sourceIndex < sources.length && (sources[sourceIndex].evidence || []).length > 0;
+            }
+          )
+        : [];
       const claim = claims[verified.claimIndex];
-      if (claim) {
+      if (claim && validSupportingSources.length > 0) {
         await prisma.claim.update({
           where: { id: claim.id },
           data: {
@@ -402,6 +423,7 @@ export class ResearchExecutionService {
           where: { id: claim.id },
           data: {
             status: "INSUFFICIENT_EVIDENCE",
+            confidenceScore: 0,
             reasoning: unsupported.reasoning || claim.reasoning,
           },
         });

@@ -50,8 +50,8 @@ const validInput = {
     { content: "Flow batteries are cheaper than lithium-ion per kWh", status: "UNVERIFIED" },
   ],
   sources: [
-    { title: "DOE Storage Report 2024", publisher: "US DOE", credibilityScore: 0.95 },
-    { title: "Random blog post", publisher: null, credibilityScore: 0.3 },
+    { title: "DOE Storage Report 2024", publisher: "US DOE", credibilityScore: 0.95, evidence: [{ content: "DOE reports 65-75% round-trip efficiency." }] },
+    { title: "Random blog post", publisher: null, credibilityScore: 0.3, evidence: [{ content: "Anecdotal lifespan claim." }] },
   ],
 };
 
@@ -224,6 +224,29 @@ describe("Verification Scout", () => {
       expect(result.success).toBe(true);
       const output = JSON.parse(result.output);
       expect(output.verifiedClaims).toHaveLength(0);
+    });
+
+
+    it("should reject verified claims without a valid evidence-backed source", async () => {
+      mockStructuredResponse({
+        verifiedClaims: [
+          { claimIndex: 0, confidenceScore: 0.9, reasoning: "unsupported", supportingSourceIndexes: [99] },
+        ],
+        unsupportedClaims: [],
+        contradictions: [],
+      });
+
+      const scout = new VerificationScout();
+      const result = await scout.execute({
+        ...baseContext,
+        context: JSON.stringify(validInput),
+      });
+
+      expect(result.success).toBe(true);
+      const output = JSON.parse(result.output);
+      expect(output.verifiedClaims).toEqual([]);
+      expect(output.unsupportedClaims).toEqual([{ claimIndex: 0, reasoning: "No valid evidence-backed source was provided for this claim." }]);
+      expect(result.metadata?.verifiedCount).toBe(0);
     });
 
     it("should not let a claim be both verified and unsupported", async () => {
