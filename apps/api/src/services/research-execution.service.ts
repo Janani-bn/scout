@@ -172,19 +172,38 @@ export class ResearchExecutionService {
           }
 
           // Save new Source row
-          const createdSource = await prisma.source.create({
-            data: {
-              researchSessionId: sessionId,
-              title: candidate.title || "Untitled Web Resource",
-              url: normalizedUrl,
-              publisher: candidate.publisher || null,
-              publishedAt: candidate.publishedAt ? new Date(candidate.publishedAt) : null,
-              accessedAt: new Date(),
-              sourceType: evaluation.sourceType || "WEBSITE",
-              credibilityScore: evaluation.credibilityScore ?? 0.5,
-              metadata: evaluation as any,
-            },
-          });
+          let createdSource;
+          try {
+            createdSource = await prisma.source.create({
+              data: {
+                researchSessionId: sessionId,
+                title: candidate.title || "Untitled Web Resource",
+                url: normalizedUrl,
+                publisher: candidate.publisher || null,
+                publishedAt: candidate.publishedAt ? new Date(candidate.publishedAt) : null,
+                accessedAt: new Date(),
+                sourceType: evaluation.sourceType || "WEBSITE",
+                credibilityScore: evaluation.credibilityScore ?? 0.5,
+                metadata: evaluation as any,
+              },
+            });
+          } catch (error: unknown) {
+            // P2002 is Prisma's unique constraint violation code
+            if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
+              const concurrentSource = await prisma.source.findFirst({
+                where: {
+                  researchSessionId: sessionId,
+                  url: { equals: normalizedUrl, mode: "insensitive" },
+                }
+              });
+              if (!concurrentSource) {
+                throw error;
+              }
+              createdSource = concurrentSource;
+            } else {
+              throw error;
+            }
+          }
           sourceId = createdSource.id;
 
           // Step 3: EvidenceAgent (Type: DATA) - Facts Extraction
