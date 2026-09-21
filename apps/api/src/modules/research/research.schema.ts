@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { ResearchSessionStatus } from "@prisma/client";
+import { ResearchSessionStatus, TaskStatus, SourceType, ClaimStatus } from "@prisma/client";
 
 /**
  * Validation schema for creating a new research session.
@@ -108,7 +108,7 @@ export const tasksQuerySchema = z.object({
       if (isNaN(parsed) || parsed < 1) return 10;
       return parsed > 100 ? 100 : parsed;
     }),
-  status: z.string().optional(),
+  status: z.nativeEnum(TaskStatus, { errorMap: () => ({ message: "invalid task status" }) }).optional(),
 });
 
 /**
@@ -132,7 +132,7 @@ export const sourcesQuerySchema = z.object({
       if (isNaN(parsed) || parsed < 1) return 10;
       return parsed > 100 ? 100 : parsed;
     }),
-  sourceType: z.string().optional(),
+  sourceType: z.nativeEnum(SourceType, { errorMap: () => ({ message: "invalid source type" }) }).optional(),
 });
 
 /**
@@ -179,7 +179,7 @@ export const claimsQuerySchema = z.object({
       if (isNaN(parsed) || parsed < 1) return 10;
       return parsed > 100 ? 100 : parsed;
     }),
-  status: z.string().optional(),
+  status: z.nativeEnum(ClaimStatus, { errorMap: () => ({ message: "invalid claim status" }) }).optional(),
 });
 
 export type TasksQuery = z.infer<typeof tasksQuerySchema>;

@@ -240,4 +240,60 @@ describe("Research Session CRUD API", () => {
       expect(res.message).toContain("deleted successfully");
     });
   });
+  describe("Enum Validation Checks (Issue #1)", () => {
+    it("should reject invalid task status enum", async () => {
+      const sessionId = "a34efb9c-4b53-4b6e-8f2c-7b49466eef4c";
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/v1/research-sessions/${sessionId}/tasks?status=INVALID_STATUS`,
+      });
+      expect(response.statusCode).toBe(400);
+      const res = JSON.parse(response.body);
+      expect(res.success).toBe(false);
+      expect(res.error.code).toBe("VALIDATION_ERROR");
+      expect(res.error.details[0].field).toBe("status");
+    });
+
+    it("should reject invalid source type enum", async () => {
+      const sessionId = "a34efb9c-4b53-4b6e-8f2c-7b49466eef4c";
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/v1/research-sessions/${sessionId}/sources?sourceType=INVALID_SOURCE`,
+      });
+      expect(response.statusCode).toBe(400);
+      const res = JSON.parse(response.body);
+      expect(res.success).toBe(false);
+      expect(res.error.code).toBe("VALIDATION_ERROR");
+      expect(res.error.details[0].field).toBe("sourceType");
+    });
+
+    it("should reject invalid claim status enum", async () => {
+      const sessionId = "a34efb9c-4b53-4b6e-8f2c-7b49466eef4c";
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/v1/research-sessions/${sessionId}/claims?status=INVALID_STATUS`,
+      });
+      expect(response.statusCode).toBe(400);
+      const res = JSON.parse(response.body);
+      expect(res.success).toBe(false);
+      expect(res.error.code).toBe("VALIDATION_ERROR");
+      expect(res.error.details[0].field).toBe("status");
+    });
+
+    it("should accept valid task status enum", async () => {
+      const sessionId = "a34efb9c-4b53-4b6e-8f2c-7b49466eef4c";
+      const mockUser = { id: "user-123", email: "dev@scout.local" };
+      const existingSession = { id: sessionId, userId: "user-123" };
+
+      (prisma.user.findUnique as any).mockResolvedValue(mockUser);
+      (prisma.researchSession.findUnique as any).mockResolvedValue(existingSession);
+
+      const response = await app.inject({
+        method: "GET",
+        url: `/api/v1/research-sessions/${sessionId}/tasks?status=COMPLETED`,
+      });
+
+      expect(response.statusCode).not.toBe(400);
+    });
+  });
 });
