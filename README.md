@@ -543,6 +543,47 @@ before submitting contributions.
 
 ---
 
+# 👥 Contributors
+
+Thanks to all the awesome people who have contributed to **SCOUT**! 🚀
+
+<a href="https://github.com/Tanmay-Mirgal/scout/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Tanmay-Mirgal/scout" alt="SCOUT Contributors" />
+</a>
+
+<br/>
+
+<table>
+  <tr>
+    <td align="center">
+      <a href="https://github.com/Tanmay-Mirgal">
+        <img src="https://github.com/Tanmay-Mirgal.png" width="80px;" alt="Tanmay Mirgal"/><br />
+        <sub><b>Tanmay Mirgal</b></sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/krishika08">
+        <img src="https://github.com/krishika08.png" width="80px;" alt="krishika08"/><br />
+        <sub><b>krishika08</b></sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/keshav33450">
+        <img src="https://github.com/keshav33450.png" width="80px;" alt="Keshav Raja S"/><br />
+        <sub><b>Keshav Raja S</b></sub>
+      </a>
+    </td>
+    <td align="center">
+      <a href="https://github.com/Nirmal0804">
+        <img src="https://github.com/Nirmal0804.png" width="80px;" alt="Nirmal_np"/><br />
+        <sub><b>Nirmal_np</b></sub>
+      </a>
+    </td>
+  </tr>
+</table>
+
+---
+
 # 🔮 Vision
 
 SCOUT aims to become an open-source foundation for **transparent, evidence-aware, multi-agent research**.
