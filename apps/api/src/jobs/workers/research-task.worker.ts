@@ -98,7 +98,16 @@ export async function evaluateSessionTerminalState(sessionId: string) {
       return;
     }
 
-    console.log(`[Worker] Sufficient tasks completed (${completedTasksCount}/${totalTasks}). Enqueuing SYNTHESIS job.`);
+    console.log(`[Worker] Sufficient tasks completed (${completedTasksCount}/${totalTasks}). Running verification step before synthesis.`);
+
+    // Verification Scout step: evaluate claim consistency across sources before final synthesis
+    try {
+      await ResearchExecutionService.executeSessionVerification(sessionId);
+    } catch (err: any) {
+      console.error(`[Worker] Verification step failed for session ${sessionId}: ${err.message}. Proceeding to synthesis.`);
+    }
+
+    console.log(`[Worker] Enqueuing SYNTHESIS job.`);
     await JobService.enqueueSynthesis(sessionId);
   } else {
     // Insufficient evidence/completed tasks. Mark session as FAILED.
