@@ -122,12 +122,20 @@ export async function evaluateSessionTerminalState(sessionId: string) {
       await JobService.enqueueSynthesis(sessionId);
     } finally {
       // Delete only our lock, so an expired/reacquired lock is never removed by this worker.
-      await redis.eval(
-        "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
-        1,
-        lockKey,
-        lockToken
-      );
+      if (redis.status === "upstash") {
+        await redis.eval(
+          "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+          [lockKey],
+          [lockToken]
+        );
+      } else {
+        await redis.eval(
+          "if redis.call('get', KEYS[1]) == ARGV[1] then return redis.call('del', KEYS[1]) else return 0 end",
+          1,
+          lockKey,
+          lockToken
+        );
+      }
     }
   } else {
     // Insufficient evidence/completed tasks. Mark session as FAILED.
