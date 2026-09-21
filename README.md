@@ -543,6 +543,16 @@ before submitting contributions.
 
 ---
 
+# 👥 Contributors
+
+Thanks to all the awesome people who have contributed to **SCOUT**! 🚀
+
+<a href="https://github.com/Tanmay-Mirgal/scout/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=Tanmay-Mirgal/scout" alt="SCOUT Contributors" />
+</a>
+
+---
+
 # 🔮 Vision
 
 SCOUT aims to become an open-source foundation for **transparent, evidence-aware, multi-agent research**.

@@ -1,5 +1,6 @@
 import { prisma } from "../lib/prisma";
 import { AgentExecutionService } from "../agents/core/agent-execution.service";
+import { Prisma } from "@prisma/client";
 import { ContentFetcher } from "../lib/content-fetcher";
 import { env } from "../config";
 
@@ -173,19 +174,38 @@ export class ResearchExecutionService {
           }
 
           // Save new Source row
-          const createdSource = await prisma.source.create({
-            data: {
-              researchSessionId: sessionId,
-              title: candidate.title || "Untitled Web Resource",
-              url: normalizedUrl,
-              publisher: candidate.publisher || null,
-              publishedAt: candidate.publishedAt ? new Date(candidate.publishedAt) : null,
-              accessedAt: new Date(),
-              sourceType: evaluation.sourceType || "WEBSITE",
-              credibilityScore: evaluation.credibilityScore ?? 0.5,
-              metadata: evaluation as any,
-            },
-          });
+          let createdSource;
+          try {
+            createdSource = await prisma.source.create({
+              data: {
+                researchSessionId: sessionId,
+                title: candidate.title || "Untitled Web Resource",
+                url: normalizedUrl,
+                publisher: candidate.publisher || null,
+                publishedAt: candidate.publishedAt ? new Date(candidate.publishedAt) : null,
+                accessedAt: new Date(),
+                sourceType: evaluation.sourceType || "WEBSITE",
+                credibilityScore: evaluation.credibilityScore ?? 0.5,
+                metadata: evaluation as any,
+              },
+            });
+          } catch (error: unknown) {
+            // P2002 is Prisma's unique constraint violation code
+            if (error && typeof error === "object" && "code" in error && error.code === "P2002") {
+              const concurrentSource = await prisma.source.findFirst({
+                where: {
+                  researchSessionId: sessionId,
+                  url: { equals: normalizedUrl, mode: "insensitive" },
+                }
+              });
+              if (!concurrentSource) {
+                throw error;
+              }
+              createdSource = concurrentSource;
+            } else {
+              throw error;
+            }
+          }
           sourceId = createdSource.id;
 
           // Step 3: EvidenceAgent (Type: DATA) - Facts Extraction
@@ -251,55 +271,112 @@ export class ResearchExecutionService {
 
       if (sessionClaims.length > 0 && allSessionEvidence.length > 0) {
         for (const claim of sessionClaims) {
-          const verification = await executeAgentStep(
-            "CRITIC", // Mapped to CRITIC db enum
-            task.id,
-            sessionId,
-            claim.content,
-            JSON.stringify(allSessionEvidence)
-          );
-
-          // Save ClaimEvidence relationships in bulk
-          const mappingsList = verification.mappings || [];
-          for (const mapItem of mappingsList) {
-            const mappedEvidence = allSessionEvidence[mapItem.evidenceIndex];
-            if (mappedEvidence) {
-              // Avoid relationship duplicates
-              await prisma.claimEvidence.upsert({
-                where: {
-                  claimId_evidenceId: {
-                    claimId: claim.id,
-                    evidenceId: mappedEvidence.id,
-                  },
-                },
-                create: {
-                  claimId: claim.id,
-                  evidenceId: mappedEvidence.id,
-                  relationship: mapItem.relationship,
-                  strength: mapItem.strength ?? 0.5,
-                  notes: mapItem.reasoning || null,
-                },
-                update: {
-                  relationship: mapItem.relationship,
-                  strength: mapItem.strength ?? 0.5,
-                  notes: mapItem.reasoning || null,
-                },
-              });
-            }
+          // 1. Lock Acquisition Check
+          const meta = (claim.metadata && typeof claim.metadata === "object" && !Array.isArray(claim.metadata) ? claim.metadata : {}) as Prisma.JsonObject;
+          if (meta.lockedBy && meta.lockedBy !== task.id) {
+            console.log(`[Execution] Claim ${claim.id} is locked by task ${meta.lockedBy}. Skipping.`);
+            continue;
           }
 
-          // Update verified Claim status
-          await prisma.claim.update({
-            where: { id: claim.id },
+          // Generate an exact deterministic timestamp to represent this specific lock acquisition attempt.
+          // By adding 1ms to the existing updatedAt, we mathematically guarantee the CAS token changes
+          // even if the claim was created or updated within the exact same millisecond window.
+          const guaranteedMutationTime = new Date(claim.updatedAt.getTime() + 1);
+
+          // 2. Atomic CAS Acquisition
+          const lockResult = await prisma.claim.updateMany({
+            where: {
+              id: claim.id,
+              updatedAt: claim.updatedAt,
+            },
             data: {
-              status: verification.status || "INSUFFICIENT_EVIDENCE",
-              confidenceScore: verification.confidenceScore ?? 0.0,
-              reasoning: verification.reasoning || null,
+              metadata: { ...meta, lockedBy: task.id },
+              updatedAt: guaranteedMutationTime,
             },
           });
+
+          if (lockResult.count === 0) {
+            console.log(`[Execution] Failed to acquire lock for Claim ${claim.id}. Skipping.`);
+            continue;
+          }
+
+          try {
+            const verification = await executeAgentStep(
+              "CRITIC", // Mapped to CRITIC db enum
+              task.id,
+              sessionId,
+              claim.content,
+              JSON.stringify(allSessionEvidence)
+            );
+
+            // Save ClaimEvidence relationships in bulk
+            const mappingsList = verification.mappings || [];
+            for (const mapItem of mappingsList) {
+              const mappedEvidence = allSessionEvidence[mapItem.evidenceIndex];
+              if (mappedEvidence) {
+                // Avoid relationship duplicates
+                await prisma.claimEvidence.upsert({
+                  where: {
+                    claimId_evidenceId: {
+                      claimId: claim.id,
+                      evidenceId: mappedEvidence.id,
+                    },
+                  },
+                  create: {
+                    claimId: claim.id,
+                    evidenceId: mappedEvidence.id,
+                    relationship: mapItem.relationship,
+                    strength: mapItem.strength ?? 0.5,
+                    notes: mapItem.reasoning || null,
+                  },
+                  update: {
+                    relationship: mapItem.relationship,
+                    strength: mapItem.strength ?? 0.5,
+                    notes: mapItem.reasoning || null,
+                  },
+                });
+              }
+            }
+
+            // Clean up the lock from metadata while preserving anything else
+            const finalMeta = { ...meta };
+            delete finalMeta.lockedBy;
+            const finalMetadataPayload = Object.keys(finalMeta).length === 0 ? null : finalMeta;
+
+            // Safe Success Path: update Claim status ONLY if we still own the exact lock
+            await prisma.claim.updateMany({
+              where: {
+                id: claim.id,
+                updatedAt: guaranteedMutationTime, // Ownership Check!
+              },
+              data: {
+                status: verification.status || "INSUFFICIENT_EVIDENCE",
+                confidenceScore: verification.confidenceScore ?? 0.0,
+                reasoning: verification.reasoning || null,
+                metadata: finalMetadataPayload as Prisma.InputJsonValue,
+                updatedAt: new Date(),
+              },
+            });
+          } catch (err: unknown) {
+            // Failure Path: Release the temporary lock ONLY if we still own the exact lock we acquired
+            const fallbackMeta = { ...meta };
+            delete fallbackMeta.lockedBy;
+            const fallbackMetadataPayload = Object.keys(fallbackMeta).length === 0 ? null : fallbackMeta;
+
+            await prisma.claim.updateMany({
+              where: {
+                id: claim.id,
+                updatedAt: guaranteedMutationTime, // Ownership Check!
+              },
+              data: {
+                metadata: fallbackMetadataPayload as Prisma.InputJsonValue,
+                updatedAt: new Date(), // Guarantee modification for future CAS
+              },
+            });
+            throw err;
+          }
         }
       }
-
       // Task completed successfully
       await prisma.researchTask.update({
         where: { id: taskId },

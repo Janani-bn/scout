@@ -1,3 +1,4 @@
+import { ResearchSessionExecutionService } from "../../services/research-session-execution.service";
 import { Worker } from "bullmq";
 import { prisma } from "../../lib/prisma";
 import { getRedisConnection } from "../queues/research.queue";
@@ -46,7 +47,7 @@ export const researchTaskJobHandler = async (job: any) => {
   }
 
   // 4. Post-Task Completion Checks: Check if all tasks in the session are finished
-  await evaluateSessionTerminalState(researchSessionId);
+  await ResearchSessionExecutionService.evaluateSessionTerminalState(researchSessionId);
 };
 
 /**
@@ -61,27 +62,6 @@ export const researchTaskWorker = new Worker(
   }
 );
 
-/**
- * Checks if all tasks for a session are completed or failed,
- * and triggers synthesis or transitions session status accordingly.
- */
-export async function evaluateSessionTerminalState(sessionId: string) {
-  // Query all tasks for the session
-  const allTasks = await prisma.researchTask.findMany({
-    where: { researchSessionId: sessionId },
-  });
-
-  const totalTasks = allTasks.length;
-  const terminalTasks = allTasks.filter((t) => t.status === "COMPLETED" || t.status === "FAILED");
-
-  // If there are still active/pending tasks, continue waiting
-  if (terminalTasks.length < totalTasks) {
-    console.log(`[Worker] Session ${sessionId} progress: ${terminalTasks.length}/${totalTasks} tasks in terminal state. Waiting for others.`);
-    return;
-  }
-
-  // All tasks have reached a terminal state! Evaluate overall session success
-  console.log(`[Worker] All ${totalTasks} tasks for session ${sessionId} have reached a terminal state.`);
 
   const completedTasksCount = allTasks.filter((t) => t.status === "COMPLETED").length;
   const failedTasksCount = allTasks.filter((t) => t.status === "FAILED").length;
