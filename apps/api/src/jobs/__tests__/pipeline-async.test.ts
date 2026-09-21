@@ -34,6 +34,7 @@ vi.mock("../../lib/prisma", () => {
         create: vi.fn().mockImplementation((args) => Promise.resolve({ id: "task-123", ...args.data })),
         findMany: vi.fn(),
         update: vi.fn().mockImplementation((args) => Promise.resolve({ id: "task-123", ...args.data })),
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
         findUnique: vi.fn(),
         count: vi.fn(),
       },
@@ -89,9 +90,10 @@ vi.mock("../../lib/redis", () => {
 });
 
 // 3. Mock BullMQ Queue and AI Provider Structured Calls via vi.hoisted
-const { mockQueueAdd, mockGenerateStructured } = vi.hoisted(() => {
+const { mockQueueAdd, mockQueueGetJob, mockGenerateStructured } = vi.hoisted(() => {
   return {
     mockQueueAdd: vi.fn(),
+    mockQueueGetJob: vi.fn().mockResolvedValue(null),
     mockGenerateStructured: vi.fn(),
   };
 });
@@ -101,6 +103,7 @@ vi.mock("bullmq", () => {
     Queue: vi.fn().mockImplementation(() => {
       return {
         add: mockQueueAdd,
+        getJob: mockQueueGetJob,
       };
     }),
     Worker: vi.fn().mockImplementation(() => {
@@ -206,21 +209,25 @@ describe("SCOUT Asynchronous Execution & Intelligent Synthesis Tests", () => {
           researchTaskId: "task-123",
         },
         expect.objectContaining({
-          jobId: "research-task:task-123",
+          jobId: "research_task_task-123",
         })
       );
     });
 
-    it("should prevent double-triggering execution of already in-progress session", async () => {
+    it("should handle already in-progress session idempotently without duplicate enqueues", async () => {
       vi.mocked(prisma.researchSession.findUnique).mockResolvedValue({
         ...mockSession,
         status: "IN_PROGRESS",
         tasks: mockTasksList,
       } as any);
 
-      await expect(
-        ResearchSessionExecutionService.startExecution(mockSession.id, mockUser.id)
-      ).rejects.toThrowError(/already in progress/);
+      vi.mocked(prisma.researchTask.findMany).mockResolvedValue([]);
+
+      const result = await ResearchSessionExecutionService.startExecution(mockSession.id, mockUser.id);
+
+      expect(result.status).toBe("IN_PROGRESS");
+      expect(result.queuedTasks).toBe(0);
+      expect(result.message).toContain("already queued");
     });
   });
 
@@ -259,7 +266,7 @@ describe("SCOUT Asynchronous Execution & Intelligent Synthesis Tests", () => {
           researchSessionId: mockSession.id,
         },
         expect.objectContaining({
-          jobId: `synthesis:${mockSession.id}`,
+          jobId: `synthesis_${mockSession.id}`,
         })
       );
     });
@@ -331,7 +338,7 @@ describe("SCOUT Asynchronous Execution & Intelligent Synthesis Tests", () => {
     it("should run final SynthesisAgent, validate references, and persist Report COMPLETED", async () => {
       vi.mocked(prisma.researchSession.findUnique).mockResolvedValue({
         ...mockSession,
-        tasks: [{ status: "COMPLETED" }],
+        tasks: [{ id: "task-123", status: "COMPLETED" }],
       } as any);
 
       vi.mocked(prisma.claim.count).mockResolvedValue(2); // Sufficient claims found
@@ -399,7 +406,10 @@ describe("SCOUT Asynchronous Execution & Intelligent Synthesis Tests", () => {
     });
 
     it("should reject synthesis and mark session as FAILED if supported claims are insufficient", async () => {
-      vi.mocked(prisma.researchSession.findUnique).mockResolvedValue(mockSession as any);
+      vi.mocked(prisma.researchSession.findUnique).mockResolvedValue({
+        ...mockSession,
+        tasks: [{ id: "task-123", status: "PENDING" }],
+      } as any);
       vi.mocked(prisma.claim.count).mockResolvedValue(0); // Under minimum supported claims limit (1)
 
       const mockJob = {
